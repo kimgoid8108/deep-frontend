@@ -1,6 +1,16 @@
-import { useState } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import SimulationViewer from '../components/SimulationViewer';
+import TacticCard from '../components/TacticCard';
+import HudBar from '../components/HudBar';
+import CoachPanel from '../components/CoachPanel';
+import Header from '../components/Header';
+import PlayerInputForm from '../components/PlayerInputForm';
+import FeedbackButtons from '../components/FeedbackButtons';
+import ErrorMessage from '../components/ErrorMessage';
+import DebugInfo from '../components/DebugInfo';
+import { TeamInstruction, DEFAULT_INSTRUCTION } from '../components/TeamInstruction';
+import { HighlightEvent } from '../components/CoachPanel';
 
 const API_BASE_URL = 'http://localhost:8000';
 
@@ -45,13 +55,48 @@ export default function Home() {
   const [simulationResult, setSimulationResult] = useState<SimulateResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+  const [lastApiCall, setLastApiCall] = useState<Date | null>(null);
+  const [simulationCount, setSimulationCount] = useState(0);
+  const [feedbackStatus, setFeedbackStatus] = useState<'none' | 'positive' | 'negative' | 'submitting'>('none');
+  const [lastSimulationTimestamp, setLastSimulationTimestamp] = useState<string | null>(null);
 
-  const handleInputChange = (field: keyof PlayerInput, value: number) => {
+  // 감독모드 상태
+  const [teamInstruction, setTeamInstruction] = useState<TeamInstruction>(DEFAULT_INSTRUCTION);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [highlights, setHighlights] = useState<HighlightEvent[]>([]);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [ballOwnerTeam, setBallOwnerTeam] = useState<string | null>(null);
+
+  // 시뮬레이션 시작 시 하이라이트 초기화
+  useEffect(() => {
+    if (simulationResult) {
+      setHighlights([]);
+      setCurrentStep(0);
+    }
+  }, [simulationResult]);
+
+  // 백엔드 연결 상태 확인
+  useEffect(() => {
+    const checkBackend = async () => {
+      try {
+        await axios.get(`${API_BASE_URL}/`);
+        setBackendStatus('online');
+      } catch {
+        setBackendStatus('offline');
+      }
+    };
+    checkBackend();
+    const interval = setInterval(checkBackend, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleInputChange = useCallback((field: keyof PlayerInput, value: number) => {
     const clampedValue = Math.max(0, Math.min(100, value));
     setPlayerInput((prev) => ({ ...prev, [field]: clampedValue }));
-  };
+  }, []);
 
-  const handleRecommend = async () => {
+  const handleRecommend = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -60,14 +105,17 @@ export default function Home() {
         { player_input: playerInput }
       );
       setRecommendation(response.data);
+      setLastApiCall(new Date());
+      setBackendStatus('online');
     } catch (err: any) {
       setError(err.response?.data?.detail || '추천 요청 실패');
+      setBackendStatus('offline');
     } finally {
       setLoading(false);
     }
-  };
+  }, [playerInput]);
 
-  const handleSimulate = async () => {
+  const handleSimulate = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -76,104 +124,121 @@ export default function Home() {
         { player_input: playerInput }
       );
       setSimulationResult(response.data);
+      setSimulationCount((prev) => prev + 1);
+      setLastApiCall(new Date());
+      setBackendStatus('online');
+      setFeedbackStatus('none');
+      setLastSimulationTimestamp(new Date().toISOString());
     } catch (err: any) {
       setError(err.response?.data?.detail || '시뮬레이션 실행 실패');
+      setBackendStatus('offline');
     } finally {
       setLoading(false);
     }
-  };
+  }, [playerInput]);
+
+  const handleFeedback = useCallback(async (isPositive: boolean) => {
+    if (!simulationResult || !lastSimulationTimestamp || feedbackStatus !== 'none') {
+      return;
+    }
+
+    setFeedbackStatus('submitting');
+    try {
+      await axios.post(`${API_BASE_URL}/feedback`, {
+        timestamp: lastSimulationTimestamp,
+        feedback: isPositive ? 'positive' : 'negative',
+        player_input: playerInput,
+        used_action: simulationResult.used_action,
+        final_score: simulationResult.final_score,
+      });
+      setFeedbackStatus(isPositive ? 'positive' : 'negative');
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.detail || err.message || '알 수 없는 오류';
+      setFeedbackStatus('none');
+      alert(`피드백 전송에 실패했습니다.\n\n오류: ${errorMessage}\n\n다시 시도해주세요.`);
+    }
+  }, [simulationResult, lastSimulationTimestamp, feedbackStatus, playerInput]);
+
+  const handleHighlight = useCallback((highlight: HighlightEvent) => {
+    setHighlights((prev) => [...prev, highlight].slice(-20));
+  }, []);
+
+  const containerStyle = useMemo(() => ({
+    padding: '20px',
+    maxWidth: '1200px',
+    margin: '0 auto' as const,
+  }), []);
+
+  const simulationContainerStyle = useMemo(() => ({
+    position: 'relative' as const,
+    minHeight: '100vh',
+    paddingBottom: '400px',
+  }), []);
 
   return (
-    <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
-      <h1>축구 선수 활용 추천 시스템</h1>
+    <div style={containerStyle}>
+      <Header backendStatus={backendStatus} />
 
-      {/* 입력 폼 */}
-      <div style={{ marginBottom: '30px', padding: '20px', border: '1px solid #ddd', borderRadius: '8px' }}>
-        <h2>선수 능력치 입력</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '15px' }}>
-          {(['shooting', 'passing', 'finishing', 'defense'] as const).map((field) => (
-            <div key={field}>
-              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                {field === 'shooting' && '슛'}
-                {field === 'passing' && '패스'}
-                {field === 'finishing' && '골결정력'}
-                {field === 'defense' && '수비'}
-                {' '}({playerInput[field]})
-              </label>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={playerInput[field]}
-                onChange={(e) => handleInputChange(field, parseInt(e.target.value))}
-                style={{ width: '100%' }}
-              />
-            </div>
-          ))}
-        </div>
-
-        <div style={{ marginTop: '20px', display: 'flex', gap: '10px' }}>
-          <button
-            onClick={handleRecommend}
-            disabled={loading}
-            style={{
-              padding: '10px 20px',
-              backgroundColor: '#0070f3',
-              color: 'white',
-              border: 'none',
-              borderRadius: '5px',
-              cursor: loading ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {loading ? '처리 중...' : '추천 받기'}
-          </button>
-          <button
-            onClick={handleSimulate}
-            disabled={loading}
-            style={{
-              padding: '10px 20px',
-              backgroundColor: '#28a745',
-              color: 'white',
-              border: 'none',
-              borderRadius: '5px',
-              cursor: loading ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {loading ? '처리 중...' : '시뮬레이션 실행'}
-          </button>
-        </div>
-      </div>
-
-      {/* 에러 메시지 */}
-      {error && (
-        <div style={{ padding: '10px', backgroundColor: '#fee', color: '#c00', borderRadius: '5px', marginBottom: '20px' }}>
-          {error}
-        </div>
+      {!simulationResult && (
+        <PlayerInputForm
+          playerInput={playerInput}
+          onInputChange={handleInputChange}
+          onRecommend={handleRecommend}
+          onSimulate={handleSimulate}
+          loading={loading}
+          hasSimulationResult={!!simulationResult}
+        />
       )}
 
-      {/* 추천 결과 */}
+      <ErrorMessage error={error || ''} />
+
       {recommendation && (
-        <div style={{ marginBottom: '30px', padding: '20px', backgroundColor: '#f0f8ff', borderRadius: '8px' }}>
-          <h2>추천 결과</h2>
-          <p><strong>행동:</strong> {recommendation.action}</p>
-          <p><strong>이유:</strong> {recommendation.reason}</p>
-          {recommendation.confidence !== undefined && (
-            <p><strong>신뢰도:</strong> {(recommendation.confidence * 100).toFixed(1)}%</p>
-          )}
+        <div style={{ marginBottom: '30px' }}>
+          <TacticCard
+            action={recommendation.action}
+            confidence={recommendation.confidence}
+            reason={recommendation.reason}
+          />
         </div>
       )}
 
-      {/* 시뮬레이션 결과 */}
       {simulationResult && (
-        <div>
-          <h2>시뮬레이션 결과</h2>
-          <p>
-            <strong>최종 점수:</strong> 팀 A {simulationResult.final_score.A} - {simulationResult.final_score.B} 팀 B
-          </p>
-          <p><strong>사용된 행동:</strong> {simulationResult.used_action}</p>
-          <SimulationViewer events={simulationResult.events} />
+        <div style={simulationContainerStyle}>
+          <HudBar
+            score={simulationResult.final_score}
+            currentStep={currentStep}
+            totalSteps={simulationResult.events.length}
+            instruction={teamInstruction}
+            ballOwnerTeam={ballOwnerTeam}
+          />
+
+          <div style={{ marginTop: '60px', marginBottom: '20px' }}>
+            <SimulationViewer
+              events={simulationResult.events}
+              teamInstruction={teamInstruction}
+              playbackSpeed={playbackSpeed}
+              onStepChange={setCurrentStep}
+              onBallOwnerChange={setBallOwnerTeam}
+              onHighlight={handleHighlight}
+            />
+          </div>
+
+          <CoachPanel
+            instruction={teamInstruction}
+            onInstructionChange={setTeamInstruction}
+            onSpeedChange={setPlaybackSpeed}
+            currentSpeed={playbackSpeed}
+            highlights={highlights}
+          />
+
+          <FeedbackButtons
+            feedbackStatus={feedbackStatus}
+            onFeedback={handleFeedback}
+          />
         </div>
       )}
+
+      <DebugInfo simulationCount={simulationCount} lastApiCall={lastApiCall} />
     </div>
   );
 }
