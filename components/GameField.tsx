@@ -15,7 +15,7 @@ interface GameFieldProps {
 }
 
 const FIELD_WIDTH = 6;
-const FIELD_HEIGHT = 4;
+const FIELD_HEIGHT = 5;
 
 // 포지션별 색상 및 아이콘
 const getPositionStyle = (position: string, team: string) => {

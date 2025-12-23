@@ -33,7 +33,7 @@ interface AnimatedGameFieldProps {
 }
 
 const FIELD_WIDTH = 6;
-const FIELD_HEIGHT = 4;
+const FIELD_HEIGHT = 5;
 
 export default function AnimatedGameField({
   players,

@@ -3,6 +3,9 @@
  * 모든 선수가 이벤트와 무관하게 미세하게 움직임
  */
 
+// ⚠️ 패스 전용 테스트 모드: 이동 로직 비활성화, 패스만 테스트
+export const PASS_ONLY_MODE = true; // true로 설정하면 선수 이동 비활성화
+
 export type PlayerIntent =
   | 'hold_goal'           // GK: 골대 지키기
   | 'hold_line'           // DF: 라인 유지
@@ -191,25 +194,28 @@ export function getDefaultIntent(
     if (position === 'FW') return 'hold_up_play'; // 공 소유 시 위치 유지
   }
 
-  // 상대가 공을 가지고 있을 때 압박/탈취 로직
-  if (isOpponentHasBall && ballOwner) {
-    const ballOwnerPlayer = playerStates.find(
-      (p) => p.team === ballOwner.team && p.playerId === ballOwner.playerId
-    );
+  // ⚠️ 패스 전용 모드: 압박/탈취 로직 비활성화
+  if (!PASS_ONLY_MODE) {
+    // 상대가 공을 가지고 있을 때 압박/탈취 로직
+    if (isOpponentHasBall && ballOwner) {
+      const ballOwnerPlayer = playerStates.find(
+        (p) => p.team === ballOwner.team && p.playerId === ballOwner.playerId
+      );
 
-    if (ballOwnerPlayer) {
-      const distanceToBall = getDistance(baseZone, ballOwnerPlayer.baseZone);
+      if (ballOwnerPlayer) {
+        const distanceToBall = getDistance(baseZone, ballOwnerPlayer.baseZone);
 
-      // 가까운 선수는 탈취 시도, 멀리 있는 선수는 압박
-      if (distanceToBall < 1.5) {
-        // 매우 가까움: 탈취 시도
-        if (position === 'DF' || position === 'CM' || position === 'FW') {
-          return 'tackle';
-        }
-      } else if (distanceToBall < 2.5) {
-        // 가까움: 압박
-        if (position === 'DF' || position === 'CM' || position === 'FW') {
-          return 'press';
+        // 가까운 선수는 탈취 시도, 멀리 있는 선수는 압박
+        if (distanceToBall < 1.5) {
+          // 매우 가까움: 탈취 시도
+          if (position === 'DF' || position === 'CM' || position === 'FW') {
+            return 'tackle';
+          }
+        } else if (distanceToBall < 2.5) {
+          // 가까움: 압박
+          if (position === 'DF' || position === 'CM' || position === 'FW') {
+            return 'press';
+          }
         }
       }
     }
@@ -221,6 +227,11 @@ export function getDefaultIntent(
   } else if (position === 'DF') {
     return 'hold_line';
   } else if (position === 'CM') {
+    // ⚠️ 패스 전용 모드: 기본 intent만 반환 (이동 로직 비활성화)
+    if (PASS_ONLY_MODE) {
+      return teamHasBall ? 'maintain_triangle' : 'cover_opposite_space';
+    }
+
     // CM 이동 조건: "지금 공 소유자가 나에게 패스할 수 있는가?"
 
     // 상태 변화가 없고 intent가 유효하면 유지
@@ -267,6 +278,11 @@ export function getDefaultIntent(
       }
     }
   } else if (position === 'FW') {
+    // ⚠️ 패스 전용 모드: 기본 intent만 반환 (이동 로직 비활성화)
+    if (PASS_ONLY_MODE) {
+      return teamHasBall ? 'hold_up_play' : 'press_forward';
+    }
+
     // FW 이동 조건: "지금 수비 라인을 흔들 수 있는가?"
 
     // 상태 변화가 없고 intent가 유효하면 유지
@@ -308,6 +324,11 @@ export function calculateMicroMovement(
   context: PositioningContext,
   time: number
 ): number[] {
+  // ⚠️ 패스 전용 모드: 이동 비활성화
+  if (PASS_ONLY_MODE) {
+    return [0, 0]; // 모든 선수 고정 위치 유지
+  }
+
   const { position, baseZone, intent, lastUpdate } = player;
   const { ballZone, ballOwner, fieldWidth, fieldHeight } = context;
   const [baseX, baseY] = baseZone;
@@ -529,6 +550,16 @@ export function updatePlayerPositioning(
   context: PositioningContext,
   currentTime: number
 ): PlayerState[] {
+  // ⚠️ 패스 전용 모드: 모든 선수 이동 완전 차단
+  if (PASS_ONLY_MODE) {
+    return players.map(player => ({
+      ...player,
+      microOffset: [0, 0], // 모든 선수 고정 위치
+      lastUpdate: currentTime,
+      // intent는 유지하되 이동은 없음
+    }));
+  }
+
   // 컨텍스트에 playerStates 추가 (거리 계산용)
   const contextWithPlayers = { ...context, playerStates: players };
 

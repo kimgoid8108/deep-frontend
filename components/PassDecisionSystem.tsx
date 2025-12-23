@@ -3,7 +3,7 @@
  * 공 소유자가 상황에 따라 자동으로 패스를 선택
  */
 
-import { PlayerState } from './PositioningSystem';
+import { PlayerState, PASS_ONLY_MODE } from './PositioningSystem';
 import { Ball } from './BallState';
 
 export interface PassCandidate {
@@ -38,6 +38,11 @@ function isShootable(
   fieldWidth: number,
   fieldHeight: number
 ): boolean {
+  // ⚠️ DF는 절대 슛 시도하지 않음
+  if (ballOwner.position === 'DF') {
+    return false;
+  }
+
   const [x, y] = ballOwner.baseZone;
   const isTeamA = ballOwner.team === 'A';
 
@@ -295,7 +300,7 @@ export function decidePass(
     };
   }
 
-  // 공 소유자 찾기 (실행용, 판단용 아님)
+  // 공 소유자 찾기
   const ballOwner = ball.ownerId;
   if (!ballOwner || ballOwner.team !== team) {
     return {
@@ -319,6 +324,107 @@ export function decidePass(
     };
   }
 
+  // ⚠️ DF는 절대 슛 시도하지 않음, 무조건 패스만
+  if (ballOwnerPlayer.position === 'DF') {
+    // 같은 팀 선수 찾기 (자기 자신 제외)
+    const teammates = allPlayers.filter(
+      (p) => p.team === team && !(p.team === ballOwner.team && p.playerId === ballOwner.playerId)
+    );
+
+    if (teammates.length === 0) {
+      return {
+        shouldPass: false,
+        targetPlayer: null,
+        passSuccessProbability: 0,
+        reason: 'DF: 같은 팀 선수가 없습니다',
+      };
+    }
+
+    // 가장 가까운 선수 선택 또는 랜덤 선택
+    let targetPlayer: PlayerState;
+    if (Math.random() < 0.7) {
+      // 70% 확률: 가장 가까운 선수
+      let closestTeammate: PlayerState | null = null;
+      let minDistance = Infinity;
+
+      for (const teammate of teammates) {
+        const distance = getDistance(ballOwnerPlayer.baseZone, teammate.baseZone);
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestTeammate = teammate;
+        }
+      }
+      targetPlayer = closestTeammate || teammates[0];
+    } else {
+      // 30% 확률: 랜덤 선택
+      targetPlayer = teammates[Math.floor(Math.random() * teammates.length)];
+    }
+
+    // 패스 성공 확률 계산 (간단하게)
+    const distance = getDistance(ballOwnerPlayer.baseZone, targetPlayer.baseZone);
+    const baseProbability = 0.8; // 기본 80%
+    const distancePenalty = Math.min(0.3, distance * 0.1); // 거리 페널티
+    const passProbability = Math.max(0.5, baseProbability - distancePenalty);
+
+    return {
+      shouldPass: true, // DF는 무조건 패스만
+      targetPlayer,
+      passSuccessProbability: passProbability,
+      reason: `DF: ${targetPlayer.position}에게 패스 (슛 불가)`,
+    };
+  }
+
+  // ⚠️ 패스 전용 모드: 모든 조건 제거, 무조건 패스
+  if (PASS_ONLY_MODE) {
+    // 같은 팀 선수 찾기 (자기 자신 제외)
+    const teammates = allPlayers.filter(
+      (p) => p.team === team && !(p.team === ballOwner.team && p.playerId === ballOwner.playerId)
+    );
+
+    if (teammates.length === 0) {
+      return {
+        shouldPass: false,
+        targetPlayer: null,
+        passSuccessProbability: 0,
+        reason: '같은 팀 선수가 없습니다',
+      };
+    }
+
+    // 가장 가까운 선수 선택 또는 랜덤 선택
+    let targetPlayer: PlayerState;
+    if (Math.random() < 0.7) {
+      // 70% 확률: 가장 가까운 선수
+      let closestTeammate: PlayerState | null = null;
+      let minDistance = Infinity;
+
+      for (const teammate of teammates) {
+        const distance = getDistance(ballOwnerPlayer.baseZone, teammate.baseZone);
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestTeammate = teammate;
+        }
+      }
+      targetPlayer = closestTeammate || teammates[0];
+    } else {
+      // 30% 확률: 랜덤 선택
+      targetPlayer = teammates[Math.floor(Math.random() * teammates.length)];
+    }
+
+    // 패스 성공 확률 계산 (간단하게)
+    const distance = getDistance(ballOwnerPlayer.baseZone, targetPlayer.baseZone);
+    const baseProbability = 0.8; // 기본 80%
+    const distancePenalty = Math.min(0.3, distance * 0.1); // 거리 페널티
+    const passProbability = Math.max(0.5, baseProbability - distancePenalty);
+
+    return {
+      shouldPass: true, // 무조건 패스
+      targetPlayer,
+      passSuccessProbability: passProbability,
+      reason: `패스 전용 모드: ${targetPlayer.position}에게 패스`,
+    };
+  }
+
+  // 일반 모드: 기존 로직 유지
   // ⭐ 팀 판단자(Decision Maker) 찾기 - CM이 판단자
   const decisionMaker = findDecisionMaker(
     team,
@@ -341,7 +447,30 @@ export function decidePass(
   // 판단자는 CM이므로, CM 관점에서 판단
   const decisionPlayer = decisionMaker;
 
+  // ⚠️ DF는 절대 슛 시도하지 않음 (일반 모드에서도)
+  if (ballOwnerPlayer.position === 'DF') {
+    // DF는 무조건 패스만 (슛 불가)
+    const candidates = findPassCandidates(decisionPlayer, allPlayers, fieldWidth, fieldHeight);
+    if (candidates.length === 0) {
+      return {
+        shouldPass: false,
+        targetPlayer: null,
+        passSuccessProbability: 0,
+        reason: 'DF: 패스 후보 없음',
+      };
+    }
+    const bestCandidate = candidates[0];
+    const passProbability = calculatePassSuccessProbability(ballOwnerPlayer, bestCandidate);
+    return {
+      shouldPass: true, // DF는 무조건 패스
+      targetPlayer: bestCandidate.player,
+      passSuccessProbability: passProbability,
+      reason: `DF: ${bestCandidate.player.position}에게 패스 (슛 불가)`,
+    };
+  }
+
   // 1. 슛 가능 여부 확인 (공 소유자 기준 - 실행 가능 여부만 확인)
+  // (DF는 이미 위에서 처리됨)
   if (isShootable(ballOwnerPlayer, fieldWidth, fieldHeight)) {
     return {
       shouldPass: false,
@@ -355,7 +484,6 @@ export function decidePass(
   const pressure = calculatePressure(ballOwnerPlayer, allPlayers);
 
   // 3. 패스 후보 찾기 (판단자 관점에서)
-  // 판단자가 있으면 판단자 기준으로, 없으면 공 소유자 기준으로
   const candidates = findPassCandidates(decisionPlayer, allPlayers, fieldWidth, fieldHeight);
 
   if (candidates.length === 0) {
@@ -369,41 +497,33 @@ export function decidePass(
 
   // 4. 최고 후보 선택
   const bestCandidate = candidates[0];
-  // 패스 성공 확률은 공 소유자(실행자) 기준으로 계산
   const passProbability = calculatePassSuccessProbability(ballOwnerPlayer, bestCandidate);
 
-  // 5. 패스 결정 로직 (팀 단위 판단)
+  // 5. 패스 결정 로직 (일반 모드)
   let shouldPass = false;
   let reason = '';
 
-  // 판단자가 있으면 더 적극적으로 패스 (CM 관점)
   const isDecisionMakerActive = decisionMaker !== null;
-  const passAggressiveness = isDecisionMakerActive ? 0.15 : 0.1; // CM이 있으면 15% 확률 증가
+  const passAggressiveness = isDecisionMakerActive ? 0.15 : 0.1;
 
   if (pressure >= 2) {
-    // 강한 압박: 무조건 패스
     shouldPass = true;
     reason = `강한 압박 (${pressure}명)${isDecisionMakerActive ? ' [CM 판단]' : ''}`;
   } else if (pressure >= 1 && passProbability > 0.6) {
-    // 약한 압박 + 높은 성공률
     shouldPass = true;
     reason = `압박 중 (${pressure}명), 성공률 ${(passProbability * 100).toFixed(0)}%${isDecisionMakerActive ? ' [CM 판단]' : ''}`;
   } else if (passProbability > 0.8 && bestCandidate.isInAttackDirection) {
-    // 매우 높은 성공률 + 공격 방향
     shouldPass = true;
     reason = `좋은 패스 기회 (성공률 ${(passProbability * 100).toFixed(0)}%)${isDecisionMakerActive ? ' [CM 판단]' : ''}`;
   } else if (pressure === 0 && Math.random() < passAggressiveness) {
-    // 압박 없을 때 가끔 패스 (CM이 있으면 더 적극적)
     shouldPass = true;
     reason = `공격 전개${isDecisionMakerActive ? ' [CM 판단]' : ''}`;
   } else if (isDecisionMakerActive && bestCandidate.player.position === 'CM') {
-    // CM 판단자가 있고, 후보가 CM이면 더 적극적으로 패스 (팀 플레이)
     if (passProbability > 0.7 && Math.random() < 0.3) {
       shouldPass = true;
       reason = `CM 간 연계 [CM 판단]`;
     }
   } else if (isDecisionMakerActive && bestCandidate.player.position === 'FW') {
-    // CM 판단자가 있고, 후보가 FW이면 전방으로 패스 (공격 전개)
     if (passProbability > 0.65 && Math.random() < 0.25) {
       shouldPass = true;
       reason = `전방 전개 [CM 판단]`;

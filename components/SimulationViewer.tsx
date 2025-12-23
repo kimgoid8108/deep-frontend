@@ -36,7 +36,7 @@ interface SimulationViewerProps {
 }
 
 const FIELD_WIDTH = 6;
-const FIELD_HEIGHT = 4;
+const FIELD_HEIGHT = 5;
 
 // 7명 선수 시스템: GK(0), DF(1,2), CM(3,4), FW(5,6)
 const POSITION_MAP: { [key: number]: string } = {
@@ -110,7 +110,7 @@ export default function SimulationViewer({
     success: boolean;
   } | null>(null);
   const lastPassCheck = useRef<number>(0);
-  const passCheckInterval = 2000; // 2초마다 패스 판단
+  const passCheckInterval = 500; // ⚠️ 패스 전용 모드: 500ms마다 패스 판단 (300-600ms 범위)
 
   // 현재 step까지의 이벤트로 상태 재구성
   const currentEvents = useMemo(() => {
@@ -202,7 +202,7 @@ export default function SimulationViewer({
           position: player.position,
           playerId: player.playerId,
           baseZone: player.zone,  // 이벤트 기반 기본 위치
-          microOffset: baseZoneChanged ? [0, 0] : (existing?.microOffset || [0, 0]),
+          microOffset: [0, 0], // ⚠️ 패스 전용 모드: 모든 선수 고정 위치
           intent: existing?.intent || 'idle',
           lastUpdate: existing?.lastUpdate || Date.now(),
         };
@@ -365,6 +365,10 @@ export default function SimulationViewer({
 
         setPassAnimation(null);
         setPassDecision(null);
+
+        // ⚠️ 패스 전용 모드: 패스 완료 후 즉시 다시 패스 판단 가능하도록
+        // (다음 프레임에서 바로 패스 판단 가능)
+        lastPassCheck.current = Date.now() - passCheckInterval; // 강제로 다음 프레임에서 패스 판단
       }
     }
   }, [passAnimation, passDecision]);
